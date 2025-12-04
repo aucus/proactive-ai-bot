@@ -1,6 +1,70 @@
 """Message formatting utilities"""
 
 
+def format_commute_message(commute_data: dict, llm_text: str = None) -> str:
+    """
+    Format commute weather message with home and office weather
+    
+    Args:
+        commute_data: Dictionary with 'home', 'office', 'home_location', 'office_location'
+        llm_text: Optional LLM-generated text
+    
+    Returns:
+        Formatted message string
+    """
+    if llm_text:
+        return llm_text
+    
+    home_weather = commute_data.get("home")
+    office_weather = commute_data.get("office")
+    home_location = commute_data.get("home_location", {})
+    office_location = commute_data.get("office_location", {})
+    
+    home_name = home_location.get("display_name", "집")
+    office_name = office_location.get("display_name", "회사")
+    
+    message = f"🚗 출근 준비 알림\n\n"
+    
+    if home_weather:
+        temp = home_weather.get("temp", "N/A")
+        feels_like = home_weather.get("feels_like", "N/A")
+        description = home_weather.get("description", "")
+        rain_prob = home_weather.get("rain_probability", 0)
+        
+        message += f"📍 {home_name} 날씨:\n"
+        message += f"- {temp}°C (체감 {feels_like}°C)\n"
+        message += f"- {description}\n"
+        message += f"- 강수확률 {rain_prob}%\n\n"
+    else:
+        message += f"📍 {home_name} 날씨 정보를 가져올 수 없어요\n\n"
+    
+    if office_weather:
+        temp = office_weather.get("temp", "N/A")
+        feels_like = office_weather.get("feels_like", "N/A")
+        description = office_weather.get("description", "")
+        rain_prob = office_weather.get("rain_probability", 0)
+        
+        message += f"📍 {office_name} 날씨:\n"
+        message += f"- {temp}°C (체감 {feels_like}°C)\n"
+        message += f"- {description}\n"
+        message += f"- 강수확률 {rain_prob}%\n\n"
+    else:
+        message += f"📍 {office_name} 날씨 정보를 가져올 수 없어요\n\n"
+    
+    # Add umbrella recommendation
+    max_rain_prob = max(
+        home_weather.get("rain_probability", 0) if home_weather else 0,
+        office_weather.get("rain_probability", 0) if office_weather else 0
+    )
+    
+    if max_rain_prob >= 30:
+        message += "☂️ 우산을 챙기세요!"
+    else:
+        message += "☂️ 우산은 필요 없어요"
+    
+    return message
+
+
 def format_weather_message(weather_data: dict, llm_text: str = None) -> str:
     """
     Format weather message

@@ -2,7 +2,7 @@ name: Evening Reminder
 
 on:
   schedule:
-    - cron: '0 9 * * 1-5'  # 18:00 KST (09:00 UTC), Monday to Friday
+    - cron: '30 8 * * 1-5'  # 17:30 KST (08:30 UTC), Monday to Friday
   workflow_dispatch:  # Allow manual trigger
 
 jobs:

@@ -232,12 +232,74 @@ def night_command():
         return 1
 
 
+def commute_command():
+    """Handle commute notification command"""
+    start_time = time.time()
+    logger.info("Starting commute notification...")
+    
+    try:
+        from src.services.commute import get_commute_weather
+        from src.bot.messages import format_commute_message
+        from src.services.llm import generate_text
+        
+        # Get commute weather (home and office)
+        commute_data = get_commute_weather()
+        
+        if not commute_data.get("home") and not commute_data.get("office"):
+            logger.error("Failed to get commute weather data")
+            log_execution("commute", False, time.time() - start_time)
+            return 1
+        
+        # Format message
+        message = format_commute_message(commute_data)
+        
+        # Optionally enhance with LLM
+        try:
+            home_weather = commute_data.get("home", {})
+            office_weather = commute_data.get("office", {})
+            home_name = commute_data.get("home_location", {}).get("display_name", "집")
+            office_name = commute_data.get("office_location", {}).get("display_name", "회사")
+            
+            if home_weather and office_weather:
+                llm_prompt = f"""다음 출근 준비 알림을 바탕으로 친근하고 자연스러운 메시지를 작성해주세요.
+한국어로 작성하고, 이모지를 적절히 사용해주세요.
+
+{home_name} 날씨: {home_weather.get('temp', 'N/A')}°C, {home_weather.get('description', '')}, 강수확률 {home_weather.get('rain_probability', 0)}%
+{office_name} 날씨: {office_weather.get('temp', 'N/A')}°C, {office_weather.get('description', '')}, 강수확률 {office_weather.get('rain_probability', 0)}%
+
+출근 준비를 도와주는 톤으로 작성해주세요."""
+                
+                enhanced_message = generate_text(llm_prompt)
+                if enhanced_message:
+                    message = enhanced_message
+        except Exception as e:
+            logger.warning(f"Failed to enhance message with LLM: {e}")
+        
+        # Send to Telegram
+        success = send_message_sync(message)
+        
+        duration = time.time() - start_time
+        log_execution("commute", success, duration)
+        
+        if success:
+            logger.info("Commute notification sent successfully")
+            return 0
+        else:
+            logger.error("Failed to send commute notification")
+            return 1
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"Commute command failed: {e}", exc_info=True)
+        log_execution("commute", False, duration)
+        return 1
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Proactive AI Telegram Bot")
     parser.add_argument(
         "command",
-        choices=["weather", "news", "schedule", "evening", "night", "health", "poll"],
+        choices=["weather", "news", "schedule", "evening", "night", "health", "poll", "commute"],
         help="Command to execute"
     )
     
@@ -266,6 +328,8 @@ def main():
     
     if args.command == "weather":
         return weather_command()
+    elif args.command == "commute":
+        return commute_command()
     elif args.command == "news":
         return news_command()
     elif args.command == "schedule":

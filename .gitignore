@@ -55,6 +55,9 @@ htmlcov/
 *.gist_id
 settings_gist_id.txt
 
+# User config (optional - can be committed for team sharing)
+# user_config.json
+
 # Virtual environment
 venv/
 env/

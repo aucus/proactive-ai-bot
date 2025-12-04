@@ -1,0 +1,46 @@
+{
+  "user": {
+    "name": "사용자",
+    "timezone": "Asia/Seoul"
+  },
+  "locations": {
+    "home": {
+      "city": "Namyangju",
+      "country_code": "KR",
+      "display_name": "경기도 남양주"
+    },
+    "office": {
+      "city": "Sindorim",
+      "country_code": "KR",
+      "display_name": "서울 신도림"
+    }
+  },
+  "schedule": {
+    "commute": {
+      "departure_time": "06:30",
+      "notification_time": "06:20",
+      "enabled": true
+    },
+    "news": {
+      "time": "07:30",
+      "enabled": true
+    },
+    "work_schedule": {
+      "time": "09:30",
+      "enabled": true
+    },
+    "evening": {
+      "time": "17:30",
+      "enabled": true
+    },
+    "night_project": {
+      "time": "21:00",
+      "enabled": true
+    }
+  },
+  "preferences": {
+    "news_categories": ["AI", "Tech", "EdTech"],
+    "language": "ko"
+  }
+}
+
