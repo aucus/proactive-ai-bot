@@ -3,9 +3,14 @@
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+from zoneinfo import ZoneInfo
 from src.utils.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
 
 logger = logging.getLogger(__name__)
+
+# Timezone 설정 (한국 시간)
+KST = ZoneInfo("Asia/Seoul")
+UTC = ZoneInfo("UTC")
 
 # Google Calendar API
 CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3"
@@ -47,6 +52,7 @@ def _get_access_token() -> Optional[str]:
 def get_today_events(calendar_id: str = "primary") -> List[Dict]:
     """
     Get today's calendar events
+    Uses KST timezone to ensure consistent behavior in GitHub Actions (UTC) and local environments
     
     Args:
         calendar_id: Calendar ID (default: primary)
@@ -62,10 +68,20 @@ def get_today_events(calendar_id: str = "primary") -> List[Dict]:
     try:
         import requests
         
-        # Get today's date range
-        now = datetime.now()
-        time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + "Z"
-        time_max = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + "Z"
+        # Get today's date range in KST (한국 시간 기준)
+        # GitHub Actions는 UTC를 사용하므로 명시적으로 KST로 변환
+        now_utc = datetime.now(UTC)
+        now_kst = now_utc.astimezone(KST)
+        today_kst = now_kst.date()
+        
+        # KST 기준 오늘 00:00과 내일 00:00을 UTC로 변환하여 API 호출
+        today_start_kst = datetime.combine(today_kst, datetime.min.time()).replace(tzinfo=KST)
+        today_end_kst = datetime.combine(today_kst + timedelta(days=1), datetime.min.time()).replace(tzinfo=KST)
+        
+        time_min = today_start_kst.astimezone(UTC).isoformat().replace('+00:00', 'Z')
+        time_max = today_end_kst.astimezone(UTC).isoformat().replace('+00:00', 'Z')
+        
+        logger.info(f"Fetching events for {today_kst} (KST) - from {time_min} to {time_max} (UTC)")
         
         url = f"{CALENDAR_API_URL}/calendars/{calendar_id}/events"
         params = {
@@ -233,14 +249,23 @@ def _is_important_event(event: Dict) -> bool:
 def get_schedule_briefing() -> Dict:
     """
     Get schedule briefing for today
+    Uses KST timezone to ensure consistent behavior in GitHub Actions (UTC) and local environments
     
     Returns:
         Dictionary with today's events
     """
     today_events = get_today_events()
     
-    # Filter events for today (remove past events)
-    now = datetime.now()
+    # Get current time in KST (한국 시간)
+    # GitHub Actions는 UTC를 사용하므로 명시적으로 KST로 변환
+    now_utc = datetime.now(UTC)
+    now_kst = now_utc.astimezone(KST)
+    today_kst = now_kst.date()
+    
+    logger.info(f"Current time (KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Today (KST): {today_kst}")
+    logger.info(f"Total events retrieved: {len(today_events)}")
+    
     upcoming_events = []
     
     for event in today_events:
@@ -248,22 +273,56 @@ def get_schedule_briefing() -> Dict:
         if start:
             try:
                 if "T" in start:
-                    event_time = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                    # Only include future events or events within last hour
-                    if event_time >= now - timedelta(hours=1):
+                    # Parse event time and convert to KST
+                    if start.endswith("Z"):
+                        # UTC time
+                        event_time_utc = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=UTC)
+                        event_time = event_time_utc.astimezone(KST)
+                    elif "+" in start or start.count("-") >= 3:
+                        # Has timezone info
+                        event_time = datetime.fromisoformat(start)
+                        if event_time.tzinfo is None:
+                            # Assume KST if no timezone
+                            event_time = event_time.replace(tzinfo=KST)
+                        else:
+                            event_time = event_time.astimezone(KST)
+                    else:
+                        # No timezone, assume KST
+                        event_time = datetime.fromisoformat(start).replace(tzinfo=KST)
+                    
+                    # Check if event is today (KST) and not too far in the past
+                    event_date = event_time.date()
+                    time_diff = (event_time - now_kst).total_seconds() / 3600  # hours
+                    
+                    # Include events that are:
+                    # 1. Today (KST)
+                    # 2. Not more than 1 hour in the past
+                    if event_date == today_kst and time_diff >= -1:
                         upcoming_events.append(event)
+                        logger.debug(f"Included event: {event.get('title')} at {event_time.strftime('%H:%M')}")
+                    else:
+                        logger.debug(f"Excluded event: {event.get('title')} (date: {event_date}, diff: {time_diff:.1f}h)")
                 else:
-                    # All-day event
-                    upcoming_events.append(event)
-            except:
-                # If parsing fails, include it
+                    # All-day event (date only, no time)
+                    # Include all all-day events for today
+                    event_date = datetime.fromisoformat(start).date()
+                    if event_date == today_kst:
+                        upcoming_events.append(event)
+                        logger.debug(f"Included all-day event: {event.get('title')}")
+            except Exception as e:
+                # If parsing fails, include it to be safe
+                logger.warning(f"Failed to parse event time '{start}': {e}, including event anyway")
                 upcoming_events.append(event)
         else:
+            # No start time, include it
             upcoming_events.append(event)
+    
+    logger.info(f"Filtered events count: {len(upcoming_events)}")
     
     return {
         "events": upcoming_events,
         "count": len(upcoming_events),
         "important_count": sum(1 for e in upcoming_events if e.get("important", False))
     }
+
 

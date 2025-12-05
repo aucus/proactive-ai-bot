@@ -54,6 +54,7 @@ htmlcov/
 # Project specific
 *.gist_id
 settings_gist_id.txt
+credentials.json
 
 # User config (optional - can be committed for team sharing)
 # user_config.json
