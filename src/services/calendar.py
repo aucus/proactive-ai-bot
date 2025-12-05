@@ -135,10 +135,16 @@ def get_today_events(calendar_id: str = "primary") -> List[Dict]:
             })
         
         logger.info(f"Retrieved {len(formatted_events)} events for today")
+        
+        if len(formatted_events) == 0:
+            logger.warning(f"No events found for {today_kst} (KST). API returned {len(events)} raw events.")
+            if len(events) > 0:
+                logger.debug(f"Raw events: {events[:2]}")  # Log first 2 events for debugging
+        
         return formatted_events
         
     except Exception as e:
-        logger.error(f"Failed to get calendar events: {e}")
+        logger.error(f"Failed to get calendar events: {e}", exc_info=True)
         return []
 
 
@@ -274,34 +280,39 @@ def get_schedule_briefing() -> Dict:
             try:
                 if "T" in start:
                     # Parse event time and convert to KST
-                    if start.endswith("Z"):
-                        # UTC time
-                        event_time_utc = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=UTC)
-                        event_time = event_time_utc.astimezone(KST)
-                    elif "+" in start or start.count("-") >= 3:
-                        # Has timezone info
-                        event_time = datetime.fromisoformat(start)
-                        if event_time.tzinfo is None:
-                            # Assume KST if no timezone
-                            event_time = event_time.replace(tzinfo=KST)
+                    try:
+                        if start.endswith("Z"):
+                            # UTC time
+                            event_time_utc = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=UTC)
+                            event_time = event_time_utc.astimezone(KST)
+                        elif "+" in start or "-" in start[-6:]:  # Has timezone offset like +09:00 or -05:00
+                            # Has timezone info (e.g., 2025-12-05T15:00:00+09:00)
+                            event_time = datetime.fromisoformat(start)
+                            if event_time.tzinfo is None:
+                                # Should not happen, but assume KST if no timezone
+                                logger.warning(f"Event time has no timezone info: {start}, assuming KST")
+                                event_time = event_time.replace(tzinfo=KST)
+                            else:
+                                event_time = event_time.astimezone(KST)
                         else:
-                            event_time = event_time.astimezone(KST)
-                    else:
-                        # No timezone, assume KST
-                        event_time = datetime.fromisoformat(start).replace(tzinfo=KST)
-                    
-                    # Check if event is today (KST) and not too far in the past
-                    event_date = event_time.date()
-                    time_diff = (event_time - now_kst).total_seconds() / 3600  # hours
-                    
-                    # Include events that are:
-                    # 1. Today (KST)
-                    # 2. Not more than 1 hour in the past
-                    if event_date == today_kst and time_diff >= -1:
+                            # No timezone, assume KST
+                            event_time = datetime.fromisoformat(start).replace(tzinfo=KST)
+                        
+                        # Check if event is today (KST) and not too far in the past
+                        event_date = event_time.date()
+                        time_diff = (event_time - now_kst).total_seconds() / 3600  # hours
+                        
+                        # Include events that are:
+                        # 1. Today (KST)
+                        # 2. Not more than 1 hour in the past
+                        if event_date == today_kst and time_diff >= -1:
+                            upcoming_events.append(event)
+                            logger.info(f"Included event: {event.get('title')} at {event_time.strftime('%Y-%m-%d %H:%M')} KST (diff: {time_diff:.1f}h)")
+                        else:
+                            logger.warning(f"Excluded event: {event.get('title')} - date: {event_date} (expected: {today_kst}), time_diff: {time_diff:.1f}h")
+                    except Exception as parse_error:
+                        logger.error(f"Failed to parse event time '{start}': {parse_error}, including event anyway")
                         upcoming_events.append(event)
-                        logger.debug(f"Included event: {event.get('title')} at {event_time.strftime('%H:%M')}")
-                    else:
-                        logger.debug(f"Excluded event: {event.get('title')} (date: {event_date}, diff: {time_diff:.1f}h)")
                 else:
                     # All-day event (date only, no time)
                     # Include all all-day events for today
@@ -318,6 +329,13 @@ def get_schedule_briefing() -> Dict:
             upcoming_events.append(event)
     
     logger.info(f"Filtered events count: {len(upcoming_events)}")
+    
+    if len(upcoming_events) == 0 and len(today_events) > 0:
+        logger.warning(f"All {len(today_events)} events were filtered out. This might indicate a timezone or filtering issue.")
+        # Log first event details for debugging
+        if today_events:
+            first_event = today_events[0]
+            logger.warning(f"First event details: title={first_event.get('title')}, start={first_event.get('start')}, time={first_event.get('time')}")
     
     return {
         "events": upcoming_events,

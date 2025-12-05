@@ -98,9 +98,19 @@ def schedule_command():
     # Get schedule briefing
     schedule_data = get_schedule_briefing()
     events = schedule_data.get("events", [])
+    total_count = schedule_data.get("count", 0)
+    
+    logger.info(f"Schedule briefing result: {len(events)} events, total count: {total_count}")
     
     if not events:
-        logger.info("No events found for today")
+        logger.warning("No events found for today after filtering")
+        # Log additional debug info
+        from src.services.calendar import get_today_events
+        all_today_events = get_today_events()
+        logger.info(f"Total events retrieved from API: {len(all_today_events)}")
+        if all_today_events:
+            logger.info(f"First event: {all_today_events[0].get('title')} at {all_today_events[0].get('start')}")
+        
         # Send message even if no events
         message = "📅 오늘 일정 브리핑\n\n오늘 예정된 일정이 없어요! 😊"
         success = send_message_sync(message)
