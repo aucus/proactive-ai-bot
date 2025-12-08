@@ -102,7 +102,7 @@ def format_weather_message(weather_data: dict, llm_text: str = None) -> str:
 
 def format_news_message(news_items: list) -> str:
     """
-    Format news briefing message
+    Format news briefing message (concise format)
     
     Args:
         news_items: List of news items
@@ -112,19 +112,45 @@ def format_news_message(news_items: list) -> str:
     """
     message = "📰 오늘의 테크 뉴스\n\n"
     
+    # Category emoji mapping
+    category_emoji = {
+        "AI": "🤖",
+        "Tech": "💻",
+        "EdTech": "📚",
+        "News": "📰"
+    }
+    
     for i, item in enumerate(news_items[:5], 1):
         title = item.get("title", "")
         summary = item.get("summary", "")
         url = item.get("url", "")
         category = item.get("category", "News")
+        source = item.get("source", "")
         
-        message += f"{i}️⃣ [{category}] {title}\n"
+        # Get emoji for category
+        emoji = category_emoji.get(category, "📰")
+        
+        # Format: [이모지] 제목
+        message += f"{i}️⃣ {emoji} {title}\n"
+        
+        # One-line summary (if available, max 50 chars)
         if summary:
-            # Limit summary length for Telegram
-            summary_text = summary[:150] if len(summary) > 150 else summary
-            message += f"   {summary_text}\n"
+            message += f"   {summary}\n"
+        
+        # Source and link (concise)
         if url:
-            message += f"   🔗 {url}\n"
+            # Extract domain from URL for cleaner display
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc.replace("www.", "")
+                # Show source if available, otherwise domain
+                display_source = source if source and source != "Unknown" else domain
+                # Use Markdown link format: [text](url) for Telegram
+                message += f"   📍 [{display_source}]({url})\n"
+            except:
+                # Fallback: just show URL
+                message += f"   🔗 {url}\n"
+        
         message += "\n"
     
     return message
