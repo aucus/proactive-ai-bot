@@ -100,7 +100,19 @@ def news_command():
 
 def schedule_command():
     """Handle schedule briefing command"""
+    start_time = time.time()
+    from datetime import datetime, timezone, timedelta
+    
+    # Log current time in both UTC and KST
+    now_utc = datetime.now(timezone.utc)
+    kst = timezone(timedelta(hours=9))
+    now_kst = now_utc.astimezone(kst)
+    
+    logger.info("=" * 60)
     logger.info("Starting schedule briefing...")
+    logger.info(f"Current time (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Current time (KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 60)
     
     from src.services.calendar import get_schedule_briefing
     from src.bot.messages import format_schedule_message
@@ -154,8 +166,12 @@ def schedule_command():
     # Send to Telegram
     success = send_message_sync(message)
     
+    duration = time.time() - start_time
+    log_execution("schedule", success, duration)
+    
     if success:
-        logger.info("Schedule briefing sent successfully")
+        logger.info(f"Schedule briefing sent successfully (took {duration:.2f}s)")
+        logger.info(f"Sent at KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
         return 0
     else:
         logger.error("Failed to send schedule briefing")
