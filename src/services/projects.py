@@ -149,10 +149,14 @@ def search_projects_from_qdrant(query: str = "active projects 진행중", limit:
             return []
         
         # Get query embedding
+        logger.info(f"Generating embedding for query: '{query}'")
         query_embedding = _get_embedding(query)
         if not query_embedding:
-            logger.warning("Failed to get query embedding, skipping search")
+            logger.error("Failed to get query embedding, skipping search")
+            logger.error("Check GEMINI_API_KEY configuration")
             return []
+        
+        logger.info(f"Generated embedding with dimension: {len(query_embedding)}")
         
         # Search in Qdrant
         url = f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search"
@@ -164,8 +168,10 @@ def search_projects_from_qdrant(query: str = "active projects 진행중", limit:
             "vector": query_embedding,
             "limit": limit,
             "with_payload": True,
-            "score_threshold": 0.5  # Minimum similarity score
+            "score_threshold": 0.3  # Lower threshold to get more results (0.3 = 30% similarity)
         }
+        
+        logger.info(f"Searching Qdrant with query: '{query}', limit: {limit}")
         
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         response.raise_for_status()
@@ -173,26 +179,32 @@ def search_projects_from_qdrant(query: str = "active projects 진행중", limit:
         data = response.json()
         results = data.get("result", [])
         
+        logger.info(f"Qdrant search returned {len(results)} results")
+        
         projects = []
         for result in results:
             payload_data = result.get("payload", {})
+            score = result.get("score", 0.0)
+            logger.debug(f"Result: score={score:.3f}, payload={payload_data.get('title', 'N/A')}")
+            
             if payload_data:
                 project = {
                     "title": payload_data.get("title", ""),
                     "status": payload_data.get("status", "active"),
                     "next_actions": payload_data.get("next_actions", []),
                     "source": "qdrant",
-                    "score": result.get("score", 0.0)
+                    "score": score
                 }
                 projects.append(project)
         
-        logger.info(f"Found {len(projects)} projects from Qdrant")
+        logger.info(f"Parsed {len(projects)} projects from Qdrant results")
         return projects
         
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to search Qdrant: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            logger.error(f"Response: {e.response.status_code} - {e.response.text}")
+            logger.error(f"Response status: {e.response.status_code}")
+            logger.error(f"Response body: {e.response.text[:500]}")
         return []
     except Exception as e:
         logger.error(f"Unexpected error searching Qdrant: {e}", exc_info=True)
@@ -227,19 +239,39 @@ def get_projects_from_obsidian() -> List[Dict]:
         
         for project_path in project_paths:
             if os.path.exists(project_path):
-                for filename in os.listdir(project_path):
-                    if filename.endswith(".md"):
-                        filepath = os.path.join(project_path, filename)
+                logger.info(f"Scanning project path: {project_path}")
+                # Scan both files and subdirectories
+                for item in os.listdir(project_path):
+                    item_path = os.path.join(project_path, item)
+                    if os.path.isfile(item_path) and item.endswith(".md"):
                         try:
-                            with open(filepath, "r", encoding="utf-8") as f:
+                            with open(item_path, "r", encoding="utf-8") as f:
                                 content = f.read()
                                 
                                 # Extract project info from frontmatter or content
-                                project = _parse_obsidian_project(filename, content)
+                                project = _parse_obsidian_project(item, content)
                                 if project:
                                     projects.append(project)
+                                    logger.debug(f"Found project: {project['title']}")
                         except Exception as e:
-                            logger.warning(f"Failed to read {filepath}: {e}")
+                            logger.warning(f"Failed to read {item_path}: {e}")
+                    elif os.path.isdir(item_path):
+                        # Also check subdirectories for project files
+                        try:
+                            for sub_item in os.listdir(item_path):
+                                if sub_item.endswith(".md"):
+                                    sub_item_path = os.path.join(item_path, sub_item)
+                                    try:
+                                        with open(sub_item_path, "r", encoding="utf-8") as f:
+                                            content = f.read()
+                                            project = _parse_obsidian_project(sub_item, content)
+                                            if project:
+                                                projects.append(project)
+                                                logger.debug(f"Found project in subdirectory: {project['title']}")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to read {sub_item_path}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Failed to scan subdirectory {item_path}: {e}")
         
         logger.info(f"Found {len(projects)} projects from Obsidian")
         return projects
@@ -392,26 +424,40 @@ def get_project_reminders() -> Dict:
     Returns:
         Dictionary with project reminders
     """
+    logger.info("Starting project reminders retrieval...")
+    logger.info(f"QDRANT_URL configured: {bool(QDRANT_URL)}")
+    logger.info(f"QDRANT_API_KEY configured: {bool(QDRANT_API_KEY)}")
+    logger.info(f"OBSIDIAN_VAULT_PATH configured: {bool(OBSIDIAN_VAULT_PATH)}")
+    
     projects = []
     
     # Try Qdrant first
     if QDRANT_URL and QDRANT_API_KEY:
+        logger.info("Attempting to search projects from Qdrant...")
         qdrant_projects = search_projects_from_qdrant()
+        logger.info(f"Found {len(qdrant_projects)} projects from Qdrant")
         projects.extend(qdrant_projects)
+    else:
+        logger.warning("Qdrant not configured (URL or API key missing)")
     
     # Fallback to Obsidian and sync to Qdrant
     if not projects:
+        logger.info("No projects from Qdrant, trying Obsidian fallback...")
         obsidian_projects = get_projects_from_obsidian()
+        logger.info(f"Found {len(obsidian_projects)} projects from Obsidian")
         projects.extend(obsidian_projects)
         
         # Sync to Qdrant for future use
         if obsidian_projects and QDRANT_URL and QDRANT_API_KEY:
             logger.info("Syncing Obsidian projects to Qdrant...")
-            sync_projects_to_qdrant(obsidian_projects)
+            sync_success = sync_projects_to_qdrant(obsidian_projects)
+            logger.info(f"Sync to Qdrant: {'success' if sync_success else 'failed'}")
     
     # If no projects found, return placeholder
     if not projects:
-        logger.info("No projects found, returning placeholder reminder")
+        logger.warning("No projects found from any source, returning placeholder")
+        logger.warning(f"Qdrant search attempted: {bool(QDRANT_URL and QDRANT_API_KEY)}")
+        logger.warning(f"Obsidian fallback attempted: {bool(OBSIDIAN_VAULT_PATH)}")
         return {
             "projects": [],
             "has_projects": False,
@@ -420,6 +466,7 @@ def get_project_reminders() -> Dict:
     
     # Filter active projects
     active_projects = [p for p in projects if p.get("status", "").lower() in ["active", "진행중", ""]]
+    logger.info(f"Filtered to {len(active_projects)} active projects (from {len(projects)} total)")
     
     return {
         "projects": active_projects[:5],  # Limit to 5 projects
