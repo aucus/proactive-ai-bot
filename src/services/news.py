@@ -96,21 +96,24 @@ def get_news_from_api(query: str, max_results: int = 5) -> List[Dict]:
         return news_items
         
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to get news from API: {e}")
+        logger.error(f"Failed to get news from API for query '{query}': {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Response status: {e.response.status_code}, body: {e.response.text[:200]}")
         return []
     except Exception as e:
-        logger.error(f"Unexpected error getting news: {e}")
+        logger.error(f"Unexpected error getting news for query '{query}': {e}", exc_info=True)
         return []
 
 
-def get_news_from_rss(topic: str = "ai", max_results: int = 5) -> List[Dict]:
+def get_news_from_rss(topic: str = "ai", max_results: int = 5, hours_limit: int = 24) -> List[Dict]:
     """
     Get news from Google News RSS (backup method)
-    Only returns articles from last 12 hours
+    Returns articles from last N hours (default 24 hours)
     
     Args:
         topic: News topic (ai, tech, edtech)
         max_results: Maximum number of results
+        hours_limit: Hours to look back (default 24, set to None to disable time limit)
     
     Returns:
         List of news items
@@ -120,35 +123,49 @@ def get_news_from_rss(topic: str = "ai", max_results: int = 5) -> List[Dict]:
         from email.utils import parsedate_to_datetime
         
         rss_url = GOOGLE_NEWS_RSS.get(topic, GOOGLE_NEWS_RSS["ai"])
+        logger.info(f"Fetching RSS from: {rss_url}")
         feed = feedparser.parse(rss_url)
         
+        if not feed.entries:
+            logger.warning(f"No entries found in RSS feed for topic: {topic}")
+            return []
+        
         now_kst = datetime.now(KST)
-        cutoff_time = now_kst - timedelta(hours=12)
+        cutoff_time = now_kst - timedelta(hours=hours_limit) if hours_limit else None
         
         news_items = []
+        skipped_old = 0
         for entry in feed.entries:
             try:
                 # Parse published time
                 published_str = entry.get("published", "")
-                if published_str:
-                    published_dt = parsedate_to_datetime(published_str)
-                    # Convert to KST if timezone-aware, otherwise assume KST
-                    if published_dt.tzinfo is None:
-                        published_dt = published_dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(KST)
-                    else:
-                        published_dt = published_dt.astimezone(KST)
-                    
-                    # Only include recent articles (last 12 hours)
-                    if published_dt < cutoff_time:
-                        continue
+                if published_str and cutoff_time:
+                    try:
+                        published_dt = parsedate_to_datetime(published_str)
+                        # Convert to KST if timezone-aware, otherwise assume UTC
+                        if published_dt.tzinfo is None:
+                            published_dt = published_dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(KST)
+                        else:
+                            published_dt = published_dt.astimezone(KST)
+                        
+                        # Only include recent articles
+                        if published_dt < cutoff_time:
+                            skipped_old += 1
+                            continue
+                    except Exception as e:
+                        logger.debug(f"Failed to parse date '{published_str}': {e}, including anyway")
+                
+                title = entry.get("title", "").strip()
+                if not title or len(title) < 10:
+                    continue
                 
                 news_items.append({
-                    "title": entry.get("title", ""),
-                    "description": entry.get("summary", ""),
+                    "title": title,
+                    "description": entry.get("summary", "").strip(),
                     "url": entry.get("link", ""),
                     "source": "Google News",
                     "published_at": published_str,
-                    "category": _categorize_news(entry.get("title", ""), entry.get("summary", ""))
+                    "category": _categorize_news(title, entry.get("summary", ""))
                 })
                 
                 if len(news_items) >= max_results * 2:  # Get more to filter duplicates
@@ -157,14 +174,17 @@ def get_news_from_rss(topic: str = "ai", max_results: int = 5) -> List[Dict]:
                 logger.warning(f"Failed to parse RSS entry: {e}")
                 continue
         
-        logger.info(f"Retrieved {len(news_items)} recent news articles from RSS")
+        if skipped_old > 0:
+            logger.info(f"Retrieved {len(news_items)} news articles from RSS (skipped {skipped_old} old articles)")
+        else:
+            logger.info(f"Retrieved {len(news_items)} news articles from RSS")
         return news_items
         
     except ImportError:
-        logger.warning("feedparser not installed, RSS fallback unavailable")
+        logger.error("feedparser not installed, RSS fallback unavailable")
         return []
     except Exception as e:
-        logger.error(f"Failed to get news from RSS: {e}")
+        logger.error(f"Failed to get news from RSS for topic '{topic}': {e}", exc_info=True)
         return []
 
 
@@ -288,35 +308,67 @@ def get_news_briefing(max_items: int = 5, gist_id: Optional[str] = None) -> List
     logger.info(f"Loaded {len(seen_urls)} seen news URLs")
     
     all_news = []
+    api_success = False
     
     # Try News API first
     if NEWS_API_KEY:
+        logger.info("Attempting to fetch news from News API...")
         for topic in ["AI", "technology", "edtech"]:
-            news = get_news_from_api(topic, max_results=5)
-            all_news.extend(news)
-            if len(all_news) >= max_items * 2:
-                break
+            try:
+                news = get_news_from_api(topic, max_results=5)
+                if news:
+                    all_news.extend(news)
+                    api_success = True
+                    logger.info(f"Retrieved {len(news)} articles from News API for topic: {topic}")
+                if len(all_news) >= max_items * 2:
+                    break
+            except Exception as e:
+                logger.warning(f"Failed to get news from API for topic '{topic}': {e}")
+    else:
+        logger.info("News API key not configured, skipping API call")
     
     # Fallback to RSS if API fails or not configured
     if not all_news:
         logger.info("Using RSS fallback for news")
+        # Try with 24-hour limit first
         for topic in ["ai", "tech", "edtech"]:
-            news = get_news_from_rss(topic, max_results=3)
-            all_news.extend(news)
+            news = get_news_from_rss(topic, max_results=5, hours_limit=24)
+            if news:
+                all_news.extend(news)
+                logger.info(f"Retrieved {len(news)} articles from RSS for topic: {topic}")
             if len(all_news) >= max_items * 2:
                 break
+        
+        # If still no news, try without time limit
+        if not all_news:
+            logger.info("No recent news found, trying without time limit...")
+            for topic in ["ai", "tech", "edtech"]:
+                news = get_news_from_rss(topic, max_results=5, hours_limit=None)
+                if news:
+                    all_news.extend(news)
+                    logger.info(f"Retrieved {len(news)} articles from RSS (no time limit) for topic: {topic}")
+                if len(all_news) >= max_items * 2:
+                    break
+    
+    if not all_news:
+        logger.error("Failed to retrieve any news from all sources")
+        return []
+    
+    logger.info(f"Total news items retrieved: {len(all_news)}")
     
     # Remove duplicates by URL and title, and filter seen URLs
     seen_titles = set()
     unique_news = []
     new_urls = set()
+    skipped_seen = 0
     
     for item in all_news:
         url = item.get("url", "")
         title = item.get("title", "").lower().strip()
         
-        # Skip if already seen or duplicate
+        # Skip if already seen
         if url in seen_urls:
+            skipped_seen += 1
             logger.debug(f"Skipping seen URL: {url[:50]}...")
             continue
         
@@ -334,30 +386,55 @@ def get_news_briefing(max_items: int = 5, gist_id: Optional[str] = None) -> List
         if len(unique_news) >= max_items:
             break
     
+    if skipped_seen > 0:
+        logger.info(f"Filtered out {skipped_seen} already seen news items")
+    
+    if not unique_news:
+        logger.warning("All news items were filtered out (already seen or duplicates)")
+        # If all items were seen, return some anyway (user might want to see them again)
+        if all_news:
+            logger.info("Returning some news items despite being seen previously")
+            for item in all_news[:max_items]:
+                url = item.get("url", "")
+                title = item.get("title", "").lower().strip()
+                if url and len(title) >= 10:
+                    if title not in seen_titles:
+                        seen_titles.add(title)
+                        unique_news.append(item)
+                        if len(unique_news) >= max_items:
+                            break
+    
     # Generate concise summaries using LLM (limit to 50 chars)
     for item in unique_news:
         if not item.get("summary"):
             description = item.get("description", "")
             if description:
-                # Generate short summary (one line, ~50 chars)
-                summary = summarize_news(description[:300])
-                if summary:
-                    # Limit to 50 characters for concise display
-                    summary = summary.strip()
-                    if len(summary) > 50:
-                        summary = summary[:47] + "..."
-                    item["summary"] = summary
-                else:
-                    # Fallback: use description truncated
+                try:
+                    # Generate short summary (one line, ~50 chars)
+                    summary = summarize_news(description[:300])
+                    if summary:
+                        # Limit to 50 characters for concise display
+                        summary = summary.strip()
+                        if len(summary) > 50:
+                            summary = summary[:47] + "..."
+                        item["summary"] = summary
+                    else:
+                        # Fallback: use description truncated
+                        item["summary"] = description[:50] + "..." if len(description) > 50 else description
+                except Exception as e:
+                    logger.warning(f"Failed to generate summary: {e}")
                     item["summary"] = description[:50] + "..." if len(description) > 50 else description
             else:
                 item["summary"] = ""
     
     # Save new URLs to Gist
     if new_urls and GIST_TOKEN:
-        updated_seen_urls = seen_urls | new_urls
-        _save_seen_news_urls(updated_seen_urls, gist_id)
-        logger.info(f"Saved {len(new_urls)} new URLs to seen list")
+        try:
+            updated_seen_urls = seen_urls | new_urls
+            _save_seen_news_urls(updated_seen_urls, gist_id)
+            logger.info(f"Saved {len(new_urls)} new URLs to seen list")
+        except Exception as e:
+            logger.warning(f"Failed to save seen URLs: {e}")
     
     logger.info(f"Generated news briefing with {len(unique_news)} new items")
     return unique_news[:max_items]

@@ -63,27 +63,38 @@ def news_command():
     
     from src.services.news import get_news_briefing
     from src.bot.messages import format_news_message
+    from src.utils.config import NEWS_API_KEY
     
-    # Get news briefing
-    news_items = get_news_briefing(max_items=5)
-    if not news_items:
-        logger.warning("No news items retrieved")
-        # Send fallback message
-        message = "📰 오늘의 뉴스\n\n뉴스를 가져오는 중 문제가 발생했어요. 잠시 후 다시 시도해주세요."
+    try:
+        # Get news briefing
+        news_items = get_news_briefing(max_items=5)
+        if not news_items:
+            logger.warning("No news items retrieved")
+            # Check if API key is configured
+            api_status = "설정됨" if NEWS_API_KEY else "미설정"
+            logger.warning(f"News API key status: {api_status}")
+            # Send fallback message
+            message = "📰 오늘의 뉴스\n\n뉴스를 가져오는 중 문제가 발생했어요. 잠시 후 다시 시도해주세요."
+            success = send_message_sync(message)
+            return 0 if success else 1
+        
+        # Format message
+        message = format_news_message(news_items)
+        
+        # Send to Telegram
         success = send_message_sync(message)
-        return 0 if success else 1
-    
-    # Format message
-    message = format_news_message(news_items)
-    
-    # Send to Telegram
-    success = send_message_sync(message)
-    
-    if success:
-        logger.info("News briefing sent successfully")
-        return 0
-    else:
-        logger.error("Failed to send news briefing")
+        
+        if success:
+            logger.info(f"News briefing sent successfully with {len(news_items)} items")
+            return 0
+        else:
+            logger.error("Failed to send news briefing")
+            return 1
+    except Exception as e:
+        logger.error(f"News command failed: {e}", exc_info=True)
+        # Send error message
+        message = "📰 오늘의 뉴스\n\n뉴스를 가져오는 중 오류가 발생했어요. 잠시 후 다시 시도해주세요."
+        send_message_sync(message)
         return 1
 
 
