@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 # Qdrant configuration (optional)
 QDRANT_URL = os.getenv("QDRANT_URL", "").rstrip("/")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "projects")
+# Use memento_gemini collection for projects (entityType = "Project")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "memento_gemini")
 
 # Obsidian vault path (optional)
 OBSIDIAN_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH", "")
@@ -85,10 +86,11 @@ def _get_embedding(text: str) -> Optional[List[float]]:
 
 def _ensure_collection() -> bool:
     """
-    Ensure Qdrant collection exists
+    Check if Qdrant collection exists
+    For memento_gemini, we assume it already exists (created by Memento system)
     
     Returns:
-        True if collection exists or was created
+        True if collection exists
     """
     if not QDRANT_URL or not QDRANT_API_KEY:
         return False
@@ -102,37 +104,21 @@ def _ensure_collection() -> bool:
         if response.status_code == 200:
             logger.info(f"Collection '{QDRANT_COLLECTION}' exists")
             return True
-        elif response.status_code == 404:
-            # Create collection
-            logger.info(f"Creating collection '{QDRANT_COLLECTION}'")
-            create_url = f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}"
-            create_payload = {
-                "vectors": {
-                    "size": 768,  # Gemini embedding dimension (text-embedding-004 or embedding-001)
-                    "distance": "Cosine"
-                }
-            }
-            create_response = requests.put(create_url, json=create_payload, headers=headers, timeout=10)
-            if create_response.status_code in [200, 201]:
-                logger.info(f"Collection '{QDRANT_COLLECTION}' created successfully")
-                return True
-            else:
-                logger.error(f"Failed to create collection: {create_response.status_code} - {create_response.text}")
-                return False
         else:
-            logger.error(f"Failed to check collection: {response.status_code} - {response.text}")
+            logger.warning(f"Collection '{QDRANT_COLLECTION}' not found (status: {response.status_code})")
             return False
     except Exception as e:
-        logger.error(f"Failed to ensure collection: {e}")
+        logger.error(f"Failed to check collection: {e}")
         return False
 
 
 def search_projects_from_qdrant(query: str = "active projects 진행중", limit: int = 5) -> List[Dict]:
     """
-    Search projects from Qdrant vector database
+    Search projects from Qdrant vector database (memento_gemini collection)
+    Filters by entityType = "Project" and prioritizes warm/hot tier projects
     
     Args:
-        query: Search query
+        query: Search query (optional, uses filter if not provided)
         limit: Maximum number of results
     
     Returns:
@@ -143,62 +129,95 @@ def search_projects_from_qdrant(query: str = "active projects 진행중", limit:
         return []
     
     try:
-        # Ensure collection exists
+        # Check collection exists (memento_gemini should already exist)
         if not _ensure_collection():
             logger.warning("Collection not available, skipping search")
             return []
         
-        # Get query embedding
-        logger.info(f"Generating embedding for query: '{query}'")
-        query_embedding = _get_embedding(query)
-        if not query_embedding:
-            logger.error("Failed to get query embedding, skipping search")
-            logger.error("Check GEMINI_API_KEY configuration")
-            return []
-        
-        logger.info(f"Generated embedding with dimension: {len(query_embedding)}")
-        
-        # Search in Qdrant
-        url = f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search"
+        # Use scroll API with filter to get projects by entityType
+        url = f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll"
         headers = {
             "api-key": QDRANT_API_KEY,
             "Content-Type": "application/json"
         }
+        
+        # Filter for entityType = "Project"
         payload = {
-            "vector": query_embedding,
-            "limit": limit,
+            "limit": limit * 2,  # Get more to filter by memory_tier
             "with_payload": True,
-            "score_threshold": 0.3  # Lower threshold to get more results (0.3 = 30% similarity)
+            "filter": {
+                "must": [
+                    {
+                        "key": "entityType",
+                        "match": {
+                            "value": "Project"
+                        }
+                    }
+                ]
+            }
         }
         
-        logger.info(f"Searching Qdrant with query: '{query}', limit: {limit}")
+        logger.info(f"Searching Qdrant for projects (entityType=Project), limit: {limit}")
         
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         response.raise_for_status()
         
         data = response.json()
-        results = data.get("result", [])
+        points = data.get("result", {}).get("points", [])
         
-        logger.info(f"Qdrant search returned {len(results)} results")
+        logger.info(f"Qdrant returned {len(points)} project points")
         
         projects = []
-        for result in results:
-            payload_data = result.get("payload", {})
-            score = result.get("score", 0.0)
-            logger.debug(f"Result: score={score:.3f}, payload={payload_data.get('title', 'N/A')}")
+        for point in points:
+            payload_data = point.get("payload", {})
+            if not payload_data:
+                continue
             
-            if payload_data:
-                project = {
-                    "title": payload_data.get("title", ""),
-                    "status": payload_data.get("status", "active"),
-                    "next_actions": payload_data.get("next_actions", []),
-                    "source": "qdrant",
-                    "score": score
-                }
-                projects.append(project)
+            name = payload_data.get("name", "")
+            if not name:
+                continue
+            
+            # Parse observations (stored as JSON string)
+            observations = payload_data.get("observations", "")
+            next_actions = []
+            if observations:
+                try:
+                    import ast
+                    obs_list = ast.literal_eval(observations) if isinstance(observations, str) else observations
+                    if isinstance(obs_list, list):
+                        # Extract first few observations as next actions
+                        next_actions = [obs[:100] for obs in obs_list[:3] if obs]
+                except Exception as e:
+                    logger.debug(f"Failed to parse observations: {e}")
+            
+            memory_tier = payload_data.get("memory_tier", "cold")
+            last_accessed = payload_data.get("last_accessed", "")
+            
+            # Determine status based on memory_tier
+            if memory_tier in ["hot", "warm"]:
+                status = "active"
+            elif memory_tier == "archive":
+                status = "archived"
+            else:
+                status = "active"  # Default to active for cold tier
+            
+            project = {
+                "title": name,
+                "status": status,
+                "next_actions": next_actions,
+                "source": "qdrant",
+                "memory_tier": memory_tier,
+                "last_accessed": last_accessed,
+                "score": 1.0  # All projects match the filter
+            }
+            projects.append(project)
         
-        logger.info(f"Parsed {len(projects)} projects from Qdrant results")
-        return projects
+        # Sort by memory_tier priority (hot > warm > cold > archive)
+        tier_priority = {"hot": 0, "warm": 1, "cold": 2, "archive": 3}
+        projects.sort(key=lambda p: tier_priority.get(p.get("memory_tier", "cold"), 3))
+        
+        logger.info(f"Parsed {len(projects)} projects from Qdrant (prioritized by memory_tier)")
+        return projects[:limit]  # Return top N projects
         
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to search Qdrant: {e}")
