@@ -352,14 +352,13 @@ def get_schedule_briefing() -> Dict:
                             # No timezone, assume KST
                             event_time = datetime.fromisoformat(start).replace(tzinfo=KST)
                         
-                        # Check if event is today (KST) and not too far in the past
+                        # Check if event is today (KST)
                         event_date = event_time.date()
                         time_diff = (event_time - now_kst).total_seconds() / 3600  # hours
                         
-                        # Include events that are:
-                        # 1. Today (KST)
-                        # 2. Not more than 1 hour in the past
-                        if event_date == today_kst and time_diff >= -1:
+                        # "오늘 일정 브리핑"은 오늘 일정 전체를 보여주는 것이 자연스럽습니다.
+                        # (과거 일정만 있는 날에도 빈 메시지가 나가는 문제 방지)
+                        if event_date == today_kst:
                             upcoming_events.append(event)
                             logger.info(f"Included event: {event.get('title')} at {event_time.strftime('%Y-%m-%d %H:%M')} KST (diff: {time_diff:.1f}h)")
                         else:
@@ -391,6 +390,11 @@ def get_schedule_briefing() -> Dict:
             first_event = today_events[0]
             logger.warning(f"First event details: title={first_event.get('title')}, start={first_event.get('start')}, time={first_event.get('time')}")
     
+    # Fallback: if filtering ended up empty but API returned events, include all today events.
+    if not upcoming_events and today_events:
+        logger.warning("Schedule filter produced 0 events; falling back to all retrieved events for today.")
+        upcoming_events = today_events
+
     return {
         "events": upcoming_events,
         "count": len(upcoming_events),
