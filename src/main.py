@@ -114,9 +114,17 @@ def schedule_command():
     logger.info(f"Current time (KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
     
-    from src.services.calendar import get_schedule_briefing
+    from src.services.calendar import get_schedule_briefing, is_calendar_configured
     from src.bot.messages import format_schedule_message
     from src.services.llm import generate_text
+
+    # If calendar OAuth is not configured, don't send a misleading "no events" message.
+    if not is_calendar_configured():
+        message = "📅 오늘 일정 브리핑\n\n구글 캘린더 연동이 설정되지 않았어요. (GOOGLE_* 시크릿 확인 필요)"
+        success = send_message_sync(message)
+        duration = time.time() - start_time
+        log_execution("schedule", success, duration)
+        return 0 if success else 1
     
     # Get schedule briefing
     schedule_data = get_schedule_briefing()

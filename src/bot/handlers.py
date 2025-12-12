@@ -113,6 +113,11 @@ async def schedule_command_handler(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text("일정을 확인하는 중...")
     
     try:
+        from src.services.calendar import is_calendar_configured
+        if not is_calendar_configured():
+            await update.message.reply_text("📅 오늘 일정 브리핑\n\n구글 캘린더 연동이 설정되지 않았어요. (GOOGLE_* 시크릿 확인 필요)")
+            return
+
         schedule_data = get_schedule_briefing()
         events = schedule_data.get("events", [])
         

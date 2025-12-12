@@ -16,6 +16,11 @@ UTC = ZoneInfo("UTC")
 CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3"
 
 
+def is_calendar_configured() -> bool:
+    """Return True if OAuth env vars are configured (non-empty)."""
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN)
+
+
 def _get_access_token() -> Optional[str]:
     """
     Get access token using refresh token
@@ -23,8 +28,13 @@ def _get_access_token() -> Optional[str]:
     Returns:
         Access token or None
     """
-    if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
-        logger.warning("Google OAuth credentials not configured")
+    if not is_calendar_configured():
+        logger.warning(
+            "Google OAuth credentials not configured "
+            f"(GOOGLE_CLIENT_ID={bool(GOOGLE_CLIENT_ID)}, "
+            f"GOOGLE_CLIENT_SECRET={bool(GOOGLE_CLIENT_SECRET)}, "
+            f"GOOGLE_REFRESH_TOKEN={bool(GOOGLE_REFRESH_TOKEN)})"
+        )
         return None
     
     try:

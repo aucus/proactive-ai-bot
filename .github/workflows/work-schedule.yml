@@ -25,6 +25,22 @@ jobs:
         run: |
           echo "Current UTC time: $(date -u '+%Y-%m-%d %H:%M:%S')"
           echo "Current KST time: $(TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M:%S')"
+
+      - name: Sanity check Google Calendar secrets presence
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          def flag(name: str) -> str:
+              v = os.getenv(name, "")
+              return "set" if bool(v.strip()) else "MISSING/EMPTY"
+          print("GOOGLE_CLIENT_ID:", flag("GOOGLE_CLIENT_ID"))
+          print("GOOGLE_CLIENT_SECRET:", flag("GOOGLE_CLIENT_SECRET"))
+          print("GOOGLE_REFRESH_TOKEN:", flag("GOOGLE_REFRESH_TOKEN"))
+          PY
       
       - name: Run schedule briefing
         env:
