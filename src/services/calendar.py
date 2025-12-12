@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 from src.utils.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
 
@@ -55,8 +55,82 @@ def _get_access_token() -> Optional[str]:
         return token_data.get("access_token")
         
     except Exception as e:
-        logger.error(f"Failed to get access token: {e}")
+        # Try to log response body safely (no secrets included)
+        try:
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                body = (resp.text or "")[:300]
+                logger.error(f"Failed to get access token: {e} (status={resp.status_code}, body={body})")
+            else:
+                logger.error(f"Failed to get access token: {e}")
+        except Exception:
+            logger.error(f"Failed to get access token: {e}")
         return None
+
+
+def get_today_events_status(calendar_id: str = "primary") -> Tuple[List[Dict], Dict]:
+    """
+    Get today's events plus status metadata.
+
+    Returns:
+        (events, meta)
+        meta example:
+          {"ok": True}
+          {"ok": False, "error": "config"|"auth"|"api"}
+    """
+    if not is_calendar_configured():
+        return [], {"ok": False, "error": "config"}
+
+    access_token = _get_access_token()
+    if not access_token:
+        # Credentials are present but token refresh failed (e.g. invalid_grant)
+        return [], {"ok": False, "error": "auth"}
+
+    try:
+        import requests
+
+        # Get today's date range in KST (한국 시간 기준)
+        now_utc = datetime.now(UTC)
+        now_kst = now_utc.astimezone(KST)
+        today_kst = now_kst.date()
+
+        # KST 기준 오늘 00:00과 내일 00:00을 UTC로 변환하여 API 호출
+        today_start_kst = datetime.combine(today_kst, datetime.min.time()).replace(tzinfo=KST)
+        today_end_kst = datetime.combine(today_kst + timedelta(days=1), datetime.min.time()).replace(tzinfo=KST)
+
+        time_min = today_start_kst.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        time_max = today_end_kst.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+        logger.info(f"Fetching events for {today_kst} (KST) - from {time_min} to {time_max} (UTC)")
+
+        url = f"{CALENDAR_API_URL}/calendars/{calendar_id}/events"
+        params = {
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "singleEvents": True,
+            "orderBy": "startTime",
+            "maxResults": 20,
+        }
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+        events = data.get("items", [])
+
+        formatted_events = _format_events(events)
+        logger.info(f"Retrieved {len(formatted_events)} events for today")
+
+        if len(formatted_events) == 0:
+            logger.warning(f"No events found for {today_kst} (KST). API returned {len(events)} raw events.")
+            if len(events) > 0:
+                logger.debug(f"Raw events: {events[:2]}")
+
+        return formatted_events, {"ok": True}
+    except Exception as e:
+        logger.error(f"Failed to get calendar events: {e}", exc_info=True)
+        return [], {"ok": False, "error": "api"}
 
 
 def get_today_events(calendar_id: str = "primary") -> List[Dict]:
@@ -70,70 +144,44 @@ def get_today_events(calendar_id: str = "primary") -> List[Dict]:
     Returns:
         List of event dictionaries
     """
-    access_token = _get_access_token()
-    if not access_token:
-        logger.warning("Cannot get calendar events: OAuth not configured")
-        return []
-    
-    try:
-        import requests
-        
-        # Get today's date range in KST (한국 시간 기준)
-        # GitHub Actions는 UTC를 사용하므로 명시적으로 KST로 변환
-        now_utc = datetime.now(UTC)
-        now_kst = now_utc.astimezone(KST)
-        today_kst = now_kst.date()
-        
-        # KST 기준 오늘 00:00과 내일 00:00을 UTC로 변환하여 API 호출
-        today_start_kst = datetime.combine(today_kst, datetime.min.time()).replace(tzinfo=KST)
-        today_end_kst = datetime.combine(today_kst + timedelta(days=1), datetime.min.time()).replace(tzinfo=KST)
-        
-        time_min = today_start_kst.astimezone(UTC).isoformat().replace('+00:00', 'Z')
-        time_max = today_end_kst.astimezone(UTC).isoformat().replace('+00:00', 'Z')
-        
-        logger.info(f"Fetching events for {today_kst} (KST) - from {time_min} to {time_max} (UTC)")
-        
-        url = f"{CALENDAR_API_URL}/calendars/{calendar_id}/events"
-        params = {
-            "timeMin": time_min,
-            "timeMax": time_max,
-            "singleEvents": True,
-            "orderBy": "startTime",
-            "maxResults": 20
-        }
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        events = data.get("items", [])
-        
-        formatted_events = []
-        for event in events:
-            start = event.get("start", {})
-            end = event.get("end", {})
-            
-            # Parse datetime
-            start_time = start.get("dateTime") or start.get("date")
-            end_time = end.get("dateTime") or end.get("date")
-            
-            # Format time for display
-            if start_time:
-                try:
-                    if "T" in start_time:
-                        dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                        time_str = dt.strftime("%H:%M")
-                    else:
-                        time_str = "하루 종일"
-                except:
-                    time_str = start_time
-            else:
-                time_str = "시간 미정"
-            
-            formatted_events.append({
+    events, meta = get_today_events_status(calendar_id)
+    if not meta.get("ok"):
+        err = meta.get("error", "unknown")
+        if err == "config":
+            logger.warning("Cannot get calendar events: OAuth env vars not configured")
+        elif err == "auth":
+            logger.warning("Cannot get calendar events: failed to obtain access token (refresh token may be invalid)")
+        else:
+            logger.warning("Cannot get calendar events: API request failed")
+    return events
+
+
+def _format_events(events: List[Dict]) -> List[Dict]:
+    """Convert raw Google Calendar events into internal format."""
+    formatted_events: List[Dict] = []
+    for event in events:
+        start = event.get("start", {})
+        end = event.get("end", {})
+
+        # Parse datetime
+        start_time = start.get("dateTime") or start.get("date")
+        end_time = end.get("dateTime") or end.get("date")
+
+        # Format time for display
+        if start_time:
+            try:
+                if "T" in start_time:
+                    dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%H:%M")
+                else:
+                    time_str = "하루 종일"
+            except Exception:
+                time_str = start_time
+        else:
+            time_str = "시간 미정"
+
+        formatted_events.append(
+            {
                 "title": event.get("summary", "제목 없음"),
                 "time": time_str,
                 "start": start_time,
@@ -141,21 +189,10 @@ def get_today_events(calendar_id: str = "primary") -> List[Dict]:
                 "location": event.get("location", ""),
                 "description": event.get("description", ""),
                 "all_day": "date" in start,
-                "important": _is_important_event(event)
-            })
-        
-        logger.info(f"Retrieved {len(formatted_events)} events for today")
-        
-        if len(formatted_events) == 0:
-            logger.warning(f"No events found for {today_kst} (KST). API returned {len(events)} raw events.")
-            if len(events) > 0:
-                logger.debug(f"Raw events: {events[:2]}")  # Log first 2 events for debugging
-        
-        return formatted_events
-        
-    except Exception as e:
-        logger.error(f"Failed to get calendar events: {e}", exc_info=True)
-        return []
+                "important": _is_important_event(event),
+            }
+        )
+    return formatted_events
 
 
 def get_tomorrow_events(calendar_id: str = "primary") -> List[Dict]:
@@ -270,7 +307,14 @@ def get_schedule_briefing() -> Dict:
     Returns:
         Dictionary with today's events
     """
-    today_events = get_today_events()
+    today_events, meta = get_today_events_status()
+    if not meta.get("ok"):
+        return {
+            "events": [],
+            "count": 0,
+            "important_count": 0,
+            "error": meta.get("error", "unknown"),
+        }
     
     # Get current time in KST (한국 시간)
     # GitHub Actions는 UTC를 사용하므로 명시적으로 KST로 변환

@@ -119,6 +119,14 @@ async def schedule_command_handler(update: Update, context: ContextTypes.DEFAULT
             return
 
         schedule_data = get_schedule_briefing()
+        if schedule_data.get("error") == "auth":
+            await update.message.reply_text(
+                "📅 오늘 일정 브리핑\n\n구글 캘린더 인증에 실패했어요. (Refresh Token 만료/권한 회수 가능)\nGOOGLE_OAUTH_SETUP.md의 5단계로 Refresh Token 재발급 후 시크릿 갱신이 필요해요."
+            )
+            return
+        if schedule_data.get("error") == "api":
+            await update.message.reply_text("📅 오늘 일정 브리핑\n\n구글 캘린더 API 호출에 실패했어요. 잠시 후 다시 시도해주세요.")
+            return
         events = schedule_data.get("events", [])
         
         if not events:

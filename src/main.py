@@ -128,6 +128,19 @@ def schedule_command():
     
     # Get schedule briefing
     schedule_data = get_schedule_briefing()
+    if schedule_data.get("error") == "auth":
+        message = "📅 오늘 일정 브리핑\n\n구글 캘린더 인증에 실패했어요. (Refresh Token 만료/권한 회수 가능)\n`GOOGLE_OAUTH_SETUP.md`의 5단계로 Refresh Token 재발급 후 시크릿 갱신이 필요해요."
+        success = send_message_sync(message, parse_mode=None)
+        duration = time.time() - start_time
+        log_execution("schedule", success, duration)
+        return 0 if success else 1
+    if schedule_data.get("error") == "api":
+        message = "📅 오늘 일정 브리핑\n\n구글 캘린더 API 호출에 실패했어요. 잠시 후 다시 시도해볼게요."
+        success = send_message_sync(message, parse_mode=None)
+        duration = time.time() - start_time
+        log_execution("schedule", success, duration)
+        return 0 if success else 1
+
     events = schedule_data.get("events", [])
     total_count = schedule_data.get("count", 0)
     
