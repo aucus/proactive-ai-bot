@@ -20,6 +20,44 @@ jobs:
           
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sanity check Qdrant connectivity (safe)
+        env:
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os, socket
+          from urllib.parse import urlparse
+          import requests
+          
+          url = (os.getenv("QDRANT_URL") or "").strip().rstrip("/")
+          key = (os.getenv("QDRANT_API_KEY") or "").strip()
+          
+          def flag(v): return "set" if bool(v) else "MISSING/EMPTY"
+          print("QDRANT_URL:", flag(url))
+          print("QDRANT_API_KEY:", flag(key))
+          
+          if not url:
+            raise SystemExit(0)
+          
+          host = urlparse(url).hostname
+          print("QDRANT_HOST:", host or "(unknown)")
+          if host:
+            try:
+              ip = socket.gethostbyname(host)
+              print("DNS_RESOLVE:", ip)
+            except Exception as e:
+              print("DNS_RESOLVE: FAILED", str(e))
+              raise SystemExit(0)
+          
+          # Try calling collections endpoint (status only)
+          try:
+            r = requests.get(f"{url}/collections", headers={"api-key": key} if key else {}, timeout=10)
+            print("HTTP /collections status:", r.status_code)
+          except Exception as e:
+            print("HTTP /collections FAILED:", str(e))
+          PY
         
       - name: Run project reminder
         env:

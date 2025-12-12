@@ -4,7 +4,7 @@ import logging
 import os
 import json
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,21 @@ OBSIDIAN_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH", "")
 
 # Gemini API for embeddings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+
+def _classify_qdrant_error(e: Exception) -> str:
+    """
+    Best-effort classification of Qdrant connectivity errors for user-facing messaging.
+    """
+    text = str(e) if e else ""
+    # Common DNS resolution errors seen on GitHub Actions
+    if "NameResolutionError" in text or "Failed to resolve" in text or "Temporary failure in name resolution" in text:
+        return "dns"
+    if "401" in text or "403" in text:
+        return "auth"
+    if "Connection refused" in text or "Max retries exceeded" in text or "ConnectionError" in text:
+        return "network"
+    return "unknown"
 
 
 def _get_embedding(text: str) -> Optional[List[float]]:
@@ -84,16 +99,16 @@ def _get_embedding(text: str) -> Optional[List[float]]:
         return None
 
 
-def _ensure_collection() -> bool:
+def _ensure_collection() -> Tuple[bool, Optional[str]]:
     """
     Check if Qdrant collection exists
     For memento_gemini, we assume it already exists (created by Memento system)
     
     Returns:
-        True if collection exists
+        (ok, error_type)
     """
     if not QDRANT_URL or not QDRANT_API_KEY:
-        return False
+        return False, "config"
     
     try:
         # Check if collection exists
@@ -103,13 +118,17 @@ def _ensure_collection() -> bool:
         
         if response.status_code == 200:
             logger.info(f"Collection '{QDRANT_COLLECTION}' exists")
-            return True
+            return True, None
         else:
             logger.warning(f"Collection '{QDRANT_COLLECTION}' not found (status: {response.status_code})")
-            return False
+            # Distinguish auth vs not found
+            if response.status_code in (401, 403):
+                return False, "auth"
+            return False, "not_found"
     except Exception as e:
+        err_type = _classify_qdrant_error(e)
         logger.error(f"Failed to check collection: {e}")
-        return False
+        return False, err_type
 
 
 def search_projects_from_qdrant(query: str = "active projects 진행중", limit: int = 5) -> List[Dict]:
@@ -130,8 +149,9 @@ def search_projects_from_qdrant(query: str = "active projects 진행중", limit:
     
     try:
         # Check collection exists (memento_gemini should already exist)
-        if not _ensure_collection():
-            logger.warning("Collection not available, skipping search")
+        ok, err_type = _ensure_collection()
+        if not ok:
+            logger.warning(f"Collection not available, skipping search (reason={err_type})")
             return []
         
         # Use scroll API with filter to get projects by entityType
@@ -377,7 +397,8 @@ def sync_projects_to_qdrant(projects: List[Dict]) -> bool:
     
     try:
         # Ensure collection exists
-        if not _ensure_collection():
+        ok, _ = _ensure_collection()
+        if not ok:
             return False
         
         # Prepare points for upsert
@@ -449,13 +470,19 @@ def get_project_reminders() -> Dict:
     logger.info(f"OBSIDIAN_VAULT_PATH configured: {bool(OBSIDIAN_VAULT_PATH)}")
     
     projects = []
+    qdrant_error: Optional[str] = None
     
     # Try Qdrant first
     if QDRANT_URL and QDRANT_API_KEY:
         logger.info("Attempting to search projects from Qdrant...")
-        qdrant_projects = search_projects_from_qdrant()
-        logger.info(f"Found {len(qdrant_projects)} projects from Qdrant")
-        projects.extend(qdrant_projects)
+        ok, err_type = _ensure_collection()
+        if not ok:
+            qdrant_error = err_type or "unknown"
+            logger.warning(f"Qdrant not reachable/collection unavailable (reason={qdrant_error})")
+        else:
+            qdrant_projects = search_projects_from_qdrant()
+            logger.info(f"Found {len(qdrant_projects)} projects from Qdrant")
+            projects.extend(qdrant_projects)
     else:
         logger.warning("Qdrant not configured (URL or API key missing)")
     
@@ -477,6 +504,26 @@ def get_project_reminders() -> Dict:
         logger.warning("No projects found from any source, returning placeholder")
         logger.warning(f"Qdrant search attempted: {bool(QDRANT_URL and QDRANT_API_KEY)}")
         logger.warning(f"Obsidian fallback attempted: {bool(OBSIDIAN_VAULT_PATH)}")
+
+        # Provide actionable message when Qdrant is configured but unreachable.
+        if QDRANT_URL and QDRANT_API_KEY and qdrant_error:
+            if qdrant_error == "dns":
+                msg = "Qdrant에 연결하지 못했어요. (QDRANT_URL DNS 실패)\nGitHub Actions에서 접근 가능한 고정 도메인/주소로 QDRANT_URL을 바꿔주세요."
+            elif qdrant_error == "auth":
+                msg = "Qdrant에 연결했지만 인증에 실패했어요. (QDRANT_API_KEY 확인 필요)"
+            elif qdrant_error == "not_found":
+                msg = f"Qdrant 컬렉션 `{QDRANT_COLLECTION}`을 찾지 못했어요. (컬렉션명 확인 필요)"
+            elif qdrant_error == "network":
+                msg = "Qdrant 네트워크 연결에 실패했어요. (방화벽/접속 허용 확인 필요)"
+            else:
+                msg = "Qdrant에서 프로젝트를 불러오지 못했어요. (연결/설정 확인 필요)"
+            return {
+                "projects": [],
+                "has_projects": False,
+                "message": msg,
+                "error": qdrant_error,
+            }
+
         return {
             "projects": [],
             "has_projects": False,
