@@ -121,8 +121,7 @@ def format_news_message(news_items: list) -> str:
     }
     
     for i, item in enumerate(news_items[:5], 1):
-        title = item.get("title", "")
-        summary = item.get("summary", "")
+        title = item.get("headline") or item.get("title", "")
         url = item.get("url", "")
         category = item.get("category", "News")
         source = item.get("source", "")
@@ -130,14 +129,10 @@ def format_news_message(news_items: list) -> str:
         # Get emoji for category
         emoji = category_emoji.get(category, "📰")
         
-        # Format: [이모지] 제목
+        # Format: [이모지] 한 줄 헤드라인
         message += f"{i}️⃣ {emoji} {title}\n"
-        
-        # One-line summary (if available, max 50 chars)
-        if summary:
-            message += f"   {summary}\n"
-        
-        # Source and link (concise)
+
+        # Source and plain link (no markdown)
         if url:
             # Extract domain from URL for cleaner display
             try:
@@ -145,11 +140,11 @@ def format_news_message(news_items: list) -> str:
                 domain = urlparse(url).netloc.replace("www.", "")
                 # Show source if available, otherwise domain
                 display_source = source if source and source != "Unknown" else domain
-                # Use Markdown link format: [text](url) for Telegram
-                message += f"   📍 [{display_source}]({url})\n"
+                message += f"   출처: {display_source}\n"
+                message += f"   링크: {url}\n"
             except:
                 # Fallback: just show URL
-                message += f"   🔗 {url}\n"
+                message += f"   링크: {url}\n"
         
         message += "\n"
     

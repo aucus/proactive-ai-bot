@@ -81,8 +81,8 @@ def news_command():
         # Format message
         message = format_news_message(news_items)
         
-        # Send to Telegram
-        success = send_message_sync(message)
+        # Send to Telegram (no markdown to avoid link "tags" and URL escaping issues)
+        success = send_message_sync(message, parse_mode=None)
         
         if success:
             logger.info(f"News briefing sent successfully with {len(news_items)} items")

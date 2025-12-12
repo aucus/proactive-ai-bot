@@ -2,11 +2,13 @@
 
 import logging
 import requests
+import re
+import html as _html
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.utils.config import NEWS_API_KEY, GIST_TOKEN
-from src.services.llm import summarize_news
+from src.services.llm import summarize_news_headline
 from src.utils.storage import load_state, save_state
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,26 @@ INTEREST_TOPICS = {
     "tech": ["technology", "tech", "startup", "innovation", "software", "hardware"],
     "edtech": ["edtech", "education technology", "online learning", "e-learning", "교육"]
 }
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_text(text: str) -> str:
+    """Best-effort cleanup for RSS/HTML-ish text."""
+    if not text:
+        return ""
+    t = text.strip()
+    # Unescape HTML entities
+    try:
+        t = _html.unescape(t)
+    except Exception:
+        pass
+    # Remove HTML tags
+    t = _TAG_RE.sub(" ", t)
+    # Collapse whitespace
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
 def get_news_from_api(query: str, max_results: int = 5) -> List[Dict]:
@@ -404,28 +426,26 @@ def get_news_briefing(max_items: int = 5, gist_id: Optional[str] = None) -> List
                         if len(unique_news) >= max_items:
                             break
     
-    # Generate concise summaries using LLM (limit to 50 chars)
+    # Create Korean one-line headlines (translate if needed)
     for item in unique_news:
-        if not item.get("summary"):
-            description = item.get("description", "")
-            if description:
-                try:
-                    # Generate short summary (one line, ~50 chars)
-                    summary = summarize_news(description[:300])
-                    if summary:
-                        # Limit to 50 characters for concise display
-                        summary = summary.strip()
-                        if len(summary) > 50:
-                            summary = summary[:47] + "..."
-                        item["summary"] = summary
-                    else:
-                        # Fallback: use description truncated
-                        item["summary"] = description[:50] + "..." if len(description) > 50 else description
-                except Exception as e:
-                    logger.warning(f"Failed to generate summary: {e}")
-                    item["summary"] = description[:50] + "..." if len(description) > 50 else description
-            else:
-                item["summary"] = ""
+        if item.get("headline"):
+            continue
+
+        raw_title = _clean_text(item.get("title", ""))
+        raw_desc = _clean_text(item.get("description", ""))
+
+        # Keep prompt payload small
+        title_for_llm = raw_title[:200]
+        desc_for_llm = raw_desc[:280]
+
+        headline = summarize_news_headline(title_for_llm, desc_for_llm, max_chars=40)
+        if headline:
+            item["headline"] = headline
+        else:
+            # Fallback: use cleaned title
+            item["headline"] = raw_title if raw_title else (raw_desc[:40] if raw_desc else "")
+        # No need for longer summaries in telegram push; keep legacy field blank
+        item["summary"] = item.get("summary", "")
     
     # Save new URLs to Gist
     if new_urls and GIST_TOKEN:

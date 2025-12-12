@@ -3,12 +3,13 @@
 import logging
 from telegram import Bot
 from telegram.error import TelegramError
+from typing import Optional
 from src.utils.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
 logger = logging.getLogger(__name__)
 
 
-async def send_message(text: str, parse_mode: str = "Markdown") -> bool:
+async def send_message(text: str, parse_mode: Optional[str] = "Markdown") -> bool:
     """
     Send message to Telegram
     
@@ -21,11 +22,11 @@ async def send_message(text: str, parse_mode: str = "Markdown") -> bool:
     """
     try:
         bot = Bot(token=TELEGRAM_TOKEN)
-        await bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=text,
-            parse_mode=parse_mode
-        )
+        kwargs = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
+        # When parse_mode is None, send as plain text (no markdown/html parsing).
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
+        await bot.send_message(**kwargs)
         logger.info("Message sent successfully")
         return True
     except TelegramError as e:
@@ -36,7 +37,7 @@ async def send_message(text: str, parse_mode: str = "Markdown") -> bool:
         return False
 
 
-def send_message_sync(text: str, parse_mode: str = "Markdown") -> bool:
+def send_message_sync(text: str, parse_mode: Optional[str] = "Markdown") -> bool:
     """
     Synchronous wrapper for send_message
     
@@ -55,6 +56,15 @@ def send_message_sync(text: str, parse_mode: str = "Markdown") -> bool:
         asyncio.set_event_loop(loop)
     
     return loop.run_until_complete(send_message(text, parse_mode))
+
+
+
+
+
+
+
+
+
 
 
 
