@@ -1,8 +1,6 @@
 name: Night Project
 
 on:
-  schedule:
-    - cron: '0 12 * * *'  # 21:00 KST (12:00 UTC)
   workflow_dispatch:  # Allow manual trigger
 
 jobs:

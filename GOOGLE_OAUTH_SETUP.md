@@ -70,6 +70,11 @@ Google Calendar API를 사용하여 일정 정보를 가져오기 위해서는 O
 5. **요약 확인**
    - 정보 확인 후 **"대시보드로 돌아가기"** 클릭
 
+📌 **중요: Testing 상태의 Refresh Token 만료**
+- OAuth 동의 화면 **게시 상태(Publishing status)가 "Testing"** 인 경우, (테스트 사용자로 발급된) **Refresh Token이 7일 후 만료**될 수 있습니다.
+- **주기적 재발급이 싫다면** 게시 상태를 **"In production"** 으로 전환하는 것이 가장 확실한 방법입니다.
+  - 개인 사용(본인만 사용)이라면 **검증(verification) 없이도** 전환은 가능하지만, 브라우저에서 **"앱이 확인되지 않았습니다"** 경고가 계속 나올 수 있습니다.
+
 ---
 
 ### 4단계: OAuth 2.0 클라이언트 ID 및 Secret 발급
@@ -96,7 +101,10 @@ Google Calendar API를 사용하여 일정 정보를 가져오기 위해서는 O
 
 ### 5단계: Refresh Token 발급
 
-Refresh Token을 얻기 위해서는 한 번만 OAuth 인증 플로우를 거쳐야 합니다.
+Refresh Token은 보통 “장기 사용”이 가능하지만, **OAuth 동의 화면 상태/정책에 따라 만료(무효화)**될 수 있습니다.
+
+- **OAuth 동의 화면이 "Testing"**: Refresh Token이 **7일 후 만료**될 수 있어 **주기적 재발급**이 필요합니다.
+- **OAuth 동의 화면이 "In production"**: 보통 **1회 발급 후 장기 사용**이 가능합니다. (단, 권한 철회/장기간 미사용 등으로 무효화 가능)
 
 #### 방법 A: Python 스크립트 사용 (권장)
 
@@ -166,11 +174,13 @@ Refresh Token을 얻기 위해서는 한 번만 OAuth 인증 플로우를 거쳐
 
 3. **스크립트 실행**
    ```bash
-   # 필요한 패키지 설치
-   pip install google-auth google-auth-oauthlib google-auth-httplib2
+   # (macOS/Homebrew Python) PEP 668 이슈로 시스템 파이썬에 pip install이 막힐 수 있어요.
+   # 프로젝트 로컬 가상환경(.venv)을 만들어 설치하는 방식을 권장합니다.
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -r requirements.txt
    
    # 스크립트 실행
-   python get_refresh_token.py
+   .venv/bin/python get_refresh_token.py
    ```
 
 4. **인증 과정**
@@ -251,8 +261,11 @@ python src/main.py schedule
    - GitHub Secrets에만 저장하세요
 
 2. **Refresh Token 만료 시**
-   - Refresh Token이 만료되면 5단계를 다시 진행해야 합니다
-   - 일반적으로 오래 사용 가능하지만, 보안 정책 변경 시 만료될 수 있습니다
+   - **Testing 상태면 7일 만료**가 발생할 수 있어, 만료 시 5단계를 다시 진행해야 합니다
+   - Production 상태에서도 다음 경우 Refresh Token이 무효화될 수 있습니다:
+     - 사용자가 앱 접근 권한을 철회(revoke)
+     - 장기간 미사용(예: 6개월 이상)로 인한 만료
+     - 동일 사용자/클라이언트에서 Refresh Token을 너무 많이 발급받아 오래된 토큰이 무효화(토큰 개수 제한)
 
 3. **프로덕션 환경**
    - 프로덕션에서는 OAuth 동의 화면을 "프로덕션"으로 승인받는 것을 권장합니다

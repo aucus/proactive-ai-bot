@@ -121,7 +121,7 @@ async def schedule_command_handler(update: Update, context: ContextTypes.DEFAULT
         schedule_data = get_schedule_briefing()
         if schedule_data.get("error") == "auth":
             await update.message.reply_text(
-                "📅 오늘 일정 브리핑\n\n구글 캘린더 인증에 실패했어요. (Refresh Token 만료/권한 회수 가능)\nGOOGLE_OAUTH_SETUP.md의 5단계로 Refresh Token 재발급 후 시크릿 갱신이 필요해요."
+                "📅 오늘 일정 브리핑\n\n구글 캘린더 인증에 실패했어요. (Refresh Token 만료/권한 회수 가능)\n\n- 현재 OAuth 동의 화면이 Testing이면 Refresh Token이 7일 후 만료될 수 있어요.\n- 해결: `GOOGLE_OAUTH_SETUP.md` 5단계로 Refresh Token 재발급 후 시크릿 갱신\n- (근본 해결) OAuth 동의 화면 게시 상태를 `In production`으로 바꾸면 주기적 만료를 대부분 피할 수 있어요."
             )
             return
         if schedule_data.get("error") == "api":
